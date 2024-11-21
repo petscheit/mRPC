@@ -9,7 +9,7 @@ mod pool;
 
 use alloy::providers::{Provider};
 use alloy::transports::{RpcError, TransportError};
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use crate::pool::WorkerPool;
@@ -27,6 +27,9 @@ impl ManyRpc {
     fn init_routes(worker_pool: Arc<WorkerPool>) -> Router {
         let app = Router::new()
             .route("/evm", post(handle_evm))
+            .route("/evm/:chain_id", post(|state, path, payload| 
+                handle_evm_with_chain(state, path, payload))
+            )
             .with_state(worker_pool);
 
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -95,6 +98,18 @@ async fn handle_evm(
                 .into_response()
         }
     }
+}
+
+// Add new handler function that reuses handle_evm
+async fn handle_evm_with_chain(
+    state: State<Arc<WorkerPool>>,
+    Path(chain_id): Path<String>,
+    Json(mut payload): Json<Value>,
+) -> impl IntoResponse {
+    if let Value::Object(ref mut map) = payload {
+        map.insert("chain_id".to_string(), Value::String(chain_id));
+    }
+    handle_evm(state, Json(payload)).await
 }
 
 // Add main function at the end

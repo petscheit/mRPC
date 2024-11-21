@@ -50,13 +50,30 @@ impl EvmWorker {
         }
     }
 
-
     pub async fn process_request(&self, request: RpcRequest) -> Result<Value, Error> {
-        self.provider
-            .client()
-            .request::<_,Value>(request.method, request.params)
-            .await
-            .map_err(|e| Error::RemoteRpcError(e.into()))
+        const MAX_RETRIES: u32 = 3;
+        const INITIAL_BACKOFF_MS: u64 = 100;
+
+        let mut attempt = 0;
+        loop {
+            match self.provider
+                .client()
+                .request::<_, Value>(request.method.clone(), request.params.clone())
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= MAX_RETRIES {
+                        return Err(Error::RemoteRpcError(e.into()));
+                    }
+                    
+                    // Exponential backoff: 100ms, 200ms, 400ms
+                    let backoff = Duration::from_millis(INITIAL_BACKOFF_MS * (2_u64.pow(attempt - 1)));
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
     }
 
     pub async fn run(&self, mut rx: mpsc::Receiver<RpcMessage>, pending: Arc<AtomicUsize>) {
