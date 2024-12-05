@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering, AtomicUsize};
+use std::sync::atomic::{Ordering, AtomicUsize};
 use serde_json::Value;
 use alloy::network::Ethereum;
 use alloy::providers::{Provider, RootProvider};
@@ -8,15 +8,7 @@ use alloy::transports::http::{Client, Http};
 use alloy::rpc::client::RpcClient;
 use tokio::sync::mpsc;
 use crate::{Error, RpcMessage, RpcRequest};
-use tokio::time::{interval, Duration, Interval};
-
-pub struct EvmPoolConnection {
-    id: u8,
-    chain_id: String,
-    url: String,
-    priority: Priority,
-    requests_per_second: u32,
-}
+use tokio::time::{interval, Duration};
 
 pub(crate) struct EvmWorker {
     id: u8,
@@ -63,11 +55,21 @@ impl EvmWorker {
             {
                 Ok(response) => return Ok(response),
                 Err(e) => {
-                    attempt += 1;
-                    if attempt >= MAX_RETRIES {
-                        return Err(Error::RemoteRpcError(e.into()));
+                    match e.as_error_resp() {
+                        Some(err) => {
+                            if err.code == 429 {
+                                return Err(Error::RateLimitExceeded);
+                            }
+
+                            attempt += 1;
+                            if attempt >= MAX_RETRIES {
+                                return Err(Error::RemoteRpcError(e.into()));
+                            }
+                        }
+                        // These errors could be transport error, decoding errors, etc. Shouldnt happen all that much
+                        _ => return Err(Error::RemoteRpcError(e.into()))
                     }
-                    
+
                     // Exponential backoff: 100ms, 200ms, 400ms
                     let backoff = Duration::from_millis(INITIAL_BACKOFF_MS * (2_u64.pow(attempt - 1)));
                     tokio::time::sleep(backoff).await;

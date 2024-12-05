@@ -1,13 +1,13 @@
-use std::cmp::PartialEq;
-use axum::{routing::{post}, Router, Json, http::StatusCode, ServiceExt};
+use axum::{routing::post, Router, Json, http::StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+mod mock_server;
 mod worker;
 mod pool;
 
-use alloy::providers::{Provider};
 use alloy::transports::{RpcError, TransportError};
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
@@ -32,8 +32,6 @@ impl ManyRpc {
             )
             .with_state(worker_pool);
 
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
-        println!("Server running on http://{}", addr);
         app
     }
 }
@@ -42,6 +40,7 @@ impl ManyRpc {
 pub enum Error {
     CustomError(String),
     RemoteRpcError(RpcError<TransportError>),
+    RateLimitExceeded,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -114,12 +113,14 @@ async fn handle_evm_with_chain(
 
 // Add main function at the end
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let worker_pool = Arc::new(WorkerPool::new());
     let app = ManyRpc::init_routes(worker_pool);
     
-    axum::Server::bind(&"127.0.0.1:3000".parse().unwrap())
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    println!("Server listening on {}", addr);
+
+    axum::serve(listener, app).await?;
+    Ok(())
 }
